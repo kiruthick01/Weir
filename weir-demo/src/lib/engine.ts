@@ -6,7 +6,7 @@ const HYSTERESIS = 0.75
 const STATE_COOLDOWN_MS = 8_000
 const WINDOW_SIZE = 30
 
-const median = (values: number[]) => {
+export const computeP50 = (values: number[]) => {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
   const middle = Math.floor(sorted.length / 2)
@@ -18,7 +18,7 @@ const rawPressure = (p50: number): PressureState =>
 
 export function evaluatePressure(approver: Approver, now: number): { state: PressureState; changed: boolean } {
   const current = approver.pressureState
-  const p50 = median(approver.latencyWindow)
+  const p50 = computeP50(approver.latencyWindow)
   const candidate = rawPressure(p50)
   if (now - approver.stateSince < STATE_COOLDOWN_MS) return { state: current, changed: false }
 

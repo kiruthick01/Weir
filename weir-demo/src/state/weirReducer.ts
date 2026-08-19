@@ -1,11 +1,13 @@
 import { computeDeadlines, enqueueRequest, evaluatePressure } from '../lib/engine'
 import { runProposalCycle } from '../lib/agent'
 import { createSeedState } from '../lib/seed'
+import { recordDecisionLatency } from '../lib/engine'
 import type { WeirState } from '../lib/types'
 
 export type WeirAction =
   | { type: 'ENQUEUE_REQUEST'; approverId: string; className: string; amount: number; now?: number }
   | { type: 'TICK'; now?: number }
+  | { type: 'RECORD_LATENCY_SAMPLE'; approverId: string; latencyMs: number; now?: number }
   | { type: 'RUN_AGENT_CYCLE'; approverId: string; now?: number }
   | { type: 'RESET' }
 
@@ -29,6 +31,10 @@ export function weirReducer(state: WeirState, action: WeirAction): WeirState {
     const backupApprover = approvers.find((item) => item.id === approver.backupApproverId)
     const newEntries = runProposalCycle(approver, state.requestClasses, ledger, now, backupApprover)
     return { ...state, approvers, ledger: [...ledger, ...newEntries] }
+  } else if (action.type === 'RECORD_LATENCY_SAMPLE') {
+    const approver = approvers.find((item) => item.id === action.approverId)
+    if (!approver) return state
+    recordDecisionLatency(approver, action.latencyMs)
   } else {
     for (const approver of approvers) {
       evaluatePressure(approver, now)
