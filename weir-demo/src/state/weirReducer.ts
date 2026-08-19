@@ -1,10 +1,12 @@
 import { computeDeadlines, enqueueRequest, evaluatePressure } from '../lib/engine'
+import { runProposalCycle } from '../lib/agent'
 import { createSeedState } from '../lib/seed'
 import type { WeirState } from '../lib/types'
 
 export type WeirAction =
   | { type: 'ENQUEUE_REQUEST'; approverId: string; className: string; amount: number; now?: number }
   | { type: 'TICK'; now?: number }
+  | { type: 'RUN_AGENT_CYCLE'; approverId: string; now?: number }
   | { type: 'RESET' }
 
 const id = () => `ledger-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -21,6 +23,12 @@ export function weirReducer(state: WeirState, action: WeirAction): WeirState {
     if (!approver || !requestClass) return state
     const request = enqueueRequest(approver, requestClass, action.amount, now)
     ledger.push({ id: id(), timestamp: now, approverId: approver.id, requestId: request.requestId, outcome: 'queued', reason: 'Request admitted to bounded approver queue.', pressureState: approver.pressureState })
+  } else if (action.type === 'RUN_AGENT_CYCLE') {
+    const approver = approvers.find((item) => item.id === action.approverId)
+    if (!approver) return state
+    const backupApprover = approvers.find((item) => item.id === approver.backupApproverId)
+    const newEntries = runProposalCycle(approver, state.requestClasses, ledger, now, backupApprover)
+    return { ...state, approvers, ledger: [...ledger, ...newEntries] }
   } else {
     for (const approver of approvers) {
       evaluatePressure(approver, now)
