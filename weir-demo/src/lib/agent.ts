@@ -177,9 +177,11 @@ export function runProposalCycle(
   recentLedger: LedgerEntry[],
   now: number,
   backupApprover?: BackupContext,
+  onProposalCount?: (count: number) => void,
 ): LedgerEntry[] {
   const entries: LedgerEntry[] = []
   const proposals = runGovernanceAgent(approver, requestClasses, now, backupApprover)
+  onProposalCount?.(proposals.length)
 
   for (const proposal of proposals) {
     // A request may already have reached a terminal outcome in an earlier

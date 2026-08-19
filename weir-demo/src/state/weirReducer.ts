@@ -32,7 +32,11 @@ export function weirReducer(state: WeirState, action: WeirAction): WeirState {
     const approver = approvers.find((item) => item.id === action.approverId)
     if (!approver) return state
     const backupApprover = approvers.find((item) => item.id === approver.backupApproverId)
-    const newEntries = runProposalCycle(approver, state.requestClasses, ledger, now, backupApprover)
+    let proposalCount = 0
+    const newEntries = runProposalCycle(approver, state.requestClasses, ledger, now, backupApprover, (count) => {
+      proposalCount = count
+    })
+    console.log('[weirReducer] RUN_AGENT_CYCLE', { approverId: action.approverId, proposalCount })
     const completedIds = terminalRequestIds(newEntries)
     approver.queue = approver.queue.filter((request) => !completedIds.has(request.requestId))
     return { ...state, approvers, ledger: [...ledger, ...newEntries] }

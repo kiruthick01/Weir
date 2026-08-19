@@ -38,7 +38,7 @@ function Dashboard() {
         </header>
 
         <div className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 lg:flex-row lg:items-center lg:justify-between">
-          <DemoControls approverId={selectedApprover.id} requestClasses={state.requestClasses} dispatch={dispatch} onReset={() => setSelectedApproverId('approver-1')} />
+          <DemoControls selectedApproverId={selectedApproverId} requestClasses={state.requestClasses} dispatch={dispatch} onReset={() => setSelectedApproverId('approver-1')} />
         </div>
 
         <SummaryStrip state={state} />

@@ -12,7 +12,7 @@ const makeAmount = (requestClass: RequestClass) => {
     : Math.round(requestClass.autoApproveThreshold * (1.35 + Math.random() * 2.2))
 }
 
-export function DemoControls({ approverId, requestClasses, dispatch, onReset }: { approverId: string; requestClasses: RequestClass[]; dispatch: Dispatch<WeirAction>; onReset: () => void }) {
+export function DemoControls({ selectedApproverId, requestClasses, dispatch, onReset }: { selectedApproverId: string; requestClasses: RequestClass[]; dispatch: Dispatch<WeirAction>; onReset: () => void }) {
   const [ramping, setRamping] = useState(false)
   const rampTimerRef = useRef<number | null>(null)
   const stepRef = useRef(0)
@@ -37,10 +37,10 @@ export function DemoControls({ approverId, requestClasses, dispatch, onReset }: 
       const requestClass = requestClasses[step % requestClasses.length]
       const now = Date.now()
 
-      dispatch({ type: 'ENQUEUE_REQUEST', approverId, className: requestClass.name, amount: makeAmount(requestClass), now })
+      dispatch({ type: 'ENQUEUE_REQUEST', approverId: selectedApproverId, className: requestClass.name, amount: makeAmount(requestClass), now })
 
       if (step > 0 && step % 5 === 0) {
-        dispatch({ type: 'RECORD_LATENCY_SAMPLE', approverId, latencyMs: 7_500 + step * 1_250 })
+        dispatch({ type: 'RECORD_LATENCY_SAMPLE', approverId: selectedApproverId, latencyMs: 7_500 + step * 1_250 })
       }
 
       if (step >= 49) stopRamp()
@@ -53,13 +53,16 @@ export function DemoControls({ approverId, requestClasses, dispatch, onReset }: 
     onReset()
   }
 
+  const agentCycleDisabled = !selectedApproverId
+  console.debug('[DemoControls] Trigger Agent Cycle disabled:', agentCycleDisabled, { selectedApproverId })
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button onClick={startRamp} disabled={ramping} className="bg-cyan-500 text-zinc-950 hover:bg-cyan-400">
         <Play className="size-4" />
         {ramping ? 'Ramping…' : 'Ramp Load'}
       </Button>
-      <Button variant="outline" onClick={() => dispatch({ type: 'RUN_AGENT_CYCLE', approverId })}>
+      <Button variant="outline" disabled={!selectedApproverId} onClick={() => dispatch({ type: 'RUN_AGENT_CYCLE', approverId: selectedApproverId })}>
         <Bot className="size-4" />
         Trigger Agent Cycle
       </Button>
