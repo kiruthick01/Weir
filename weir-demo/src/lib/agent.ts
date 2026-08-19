@@ -15,6 +15,22 @@ import type {
   RequestClass,
 } from './types'
 
+export const TERMINAL_OUTCOMES: ReadonlySet<DecisionOutcome> = new Set([
+  'delegated',
+  'auto_approved',
+  'manually_approved',
+  'timed_out',
+])
+
+export const isTerminalEntry = (entry: LedgerEntry) =>
+  TERMINAL_OUTCOMES.has(entry.outcome) ||
+  (entry.outcome === 'queued' && entry.reason.startsWith('Escalation noted;'))
+
+export const hasTerminalDecision = (
+  ledger: LedgerEntry[],
+  requestId: string,
+) => ledger.some((entry) => entry.requestId === requestId && isTerminalEntry(entry))
+
 type BackupContext = Pick<Approver, 'id' | 'pressureState'>
 
 const ledgerId = (now: number) =>
@@ -37,10 +53,14 @@ export function runGovernanceAgent(
 ): Proposal[] {
   if (approver.pressureState !== 'critical') return []
 
-  const queueDepth = approver.queue.length
+  // Always derive eligibility from the queue passed to this invocation. The
+  // reducer removes terminal requests after each cycle, so no earlier queue
+  // snapshot can leak into a later agent pass.
+  const queuedRequests = [...approver.queue]
+  const queueDepth = queuedRequests.length
   const secondsInCritical = Math.max(0, (now - approver.stateSince) / 1000)
 
-  return approver.queue.flatMap((request): Proposal[] => {
+  return queuedRequests.flatMap((request): Proposal[] => {
     const requestClass = requestClasses.find((item) => item.name === request.className)
     if (!requestClass) return []
 
@@ -162,6 +182,10 @@ export function runProposalCycle(
   const proposals = runGovernanceAgent(approver, requestClasses, now, backupApprover)
 
   for (const proposal of proposals) {
+    // A request may already have reached a terminal outcome in an earlier
+    // cycle. Re-check defensively before creating any new ledger event.
+    if (hasTerminalDecision([...recentLedger, ...entries], proposal.requestId)) continue
+
     const request = approver.queue.find((item) => item.requestId === proposal.requestId)
     const requestClass = request && requestClasses.find((item) => item.name === request.className)
     if (!request || !requestClass) continue
@@ -192,7 +216,12 @@ export function runProposalCycle(
     const retryValidation = validateProposal(retry, request, requestClass, approver, [...recentLedger, ...entries], now)
     if (retryValidation.ok) {
       const outcome = outcomeFor(retry.kind)
-      if (outcome) entries.push(commit(retry, outcome, approver, now, retryValidation.reason))
+      if (outcome) {
+        const retryReason = retry.kind === 'escalate_to_human'
+          ? `Escalation noted; human review required. ${retryValidation.reason}`
+          : retryValidation.reason
+        entries.push(commit(retry, outcome, approver, now, retryReason))
+      }
     } else {
       entries.push(commit(
         retry,

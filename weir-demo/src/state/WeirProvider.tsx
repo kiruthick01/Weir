@@ -21,10 +21,13 @@ export function WeirProvider({ children }: { children: ReactNode }) {
     for (const approver of state.approvers) {
       const previous = previousPressureRef.current.get(approver.id) ?? approver.pressureState
       const lastRun = lastAgentRunRef.current.get(approver.id) ?? 0
-      const enteredCritical = previous !== 'critical' && approver.pressureState === 'critical'
-      const needsPeriodicRun = approver.pressureState === 'critical' && now - lastRun >= 5_000
+      const pressureNeedsAgent = approver.pressureState === 'elevated' || approver.pressureState === 'critical'
+      const enteredPressureState = previous !== approver.pressureState && pressureNeedsAgent
+      // Five seconds keeps the local demo responsive; a production scheduler
+      // should use the architecture's 30–60 second sustained-pressure cadence.
+      const needsPeriodicRun = pressureNeedsAgent && now - lastRun >= 5_000
 
-      if (enteredCritical || needsPeriodicRun) {
+      if (enteredPressureState || needsPeriodicRun) {
         dispatch({ type: 'RUN_AGENT_CYCLE', approverId: approver.id, now })
         lastAgentRunRef.current.set(approver.id, now)
       }
