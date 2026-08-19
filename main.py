@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.db import create_session_factory
 from app.settings import Settings
@@ -26,6 +27,7 @@ app.include_router(approvers.router)
 app.include_router(decisions.router)
 app.include_router(config.router)
 app.include_router(ops.router)
+app.mount("/", StaticFiles(directory="dashboard/static", html=True), name="dashboard")
 
 
 def main():

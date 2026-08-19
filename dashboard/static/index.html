@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weir — Admission Control</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LIVE GOVERNANCE CONSOLE</div>
+      <h1>Weir <span>—</span> Admission Control</h1>
+    </div>
+    <div id="system-health" class="health degraded"><i></i><span>degraded</span></div>
+  </header>
+
+  <main>
+    <section class="section-heading">
+      <div><span class="eyebrow">APPROVER CAPACITY</span><h2>Pressure overview</h2></div>
+      <span class="refresh-note">polling every 2s</span>
+    </section>
+    <section id="approver-cards" class="approver-grid" aria-live="polite"></section>
+
+    <section class="workspace">
+      <div class="section-heading">
+        <div><span class="eyebrow">SELECTED APPROVER</span><h2 id="queue-title">Queue</h2></div>
+        <span id="queue-count" class="count">0 requests</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Request</th><th>Source</th><th>Class</th><th>Queued</th><th>Deadline</th><th>Override</th></tr></thead>
+          <tbody id="queue-body"><tr><td colspan="6" class="empty">No approver selected.</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="workspace ledger-section">
+      <div class="section-heading">
+        <div><span class="eyebrow">AUDIT TRAIL</span><h2>Decision ledger</h2></div>
+        <span id="ledger-count" class="count">0 entries</span>
+      </div>
+      <div id="ledger" class="ledger"></div>
+    </section>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>
