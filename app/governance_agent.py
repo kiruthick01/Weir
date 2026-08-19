@@ -286,6 +286,8 @@ def _offline_proposals(context: dict[str, Any]) -> list[Proposal]:
             enqueue_time = item["enqueue_time"]
             if isinstance(enqueue_time, str):
                 enqueue_time = datetime.fromisoformat(enqueue_time)
+            if isinstance(enqueue_time, datetime) and enqueue_time.tzinfo is None:
+                enqueue_time = enqueue_time.replace(tzinfo=timezone.utc)
             waited_fraction = (datetime.now(timezone.utc) - enqueue_time).total_seconds() / max_wait
         if waited_fraction is None or waited_fraction < 0.50:
             continue
