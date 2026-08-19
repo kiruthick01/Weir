@@ -1,4 +1,10 @@
-// Simulated governance agent for demo purposes — see governance_agent.py in the runnable-codebase track for the real Claude tool-use version.
+/*
+ * This is a fully simulated, deterministic TypeScript governance agent for
+ * demo purposes. It stands in for a real Claude tool-use loop and performs
+ * no live model calls, network requests, or API-key lookups. See
+ * governance_agent.py in the runnable-codebase track for the real Claude
+ * tool-use version.
+ */
 
 import type {
   Approver,

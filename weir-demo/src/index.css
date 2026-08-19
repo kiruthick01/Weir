@@ -13,3 +13,16 @@ body {
   min-height: 100vh;
   background: #09090b;
 }
+
+@keyframes ledger-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pressure-flash {
+  0% { box-shadow: 0 0 0 0 rgb(34 211 238 / 0.65); }
+  100% { box-shadow: 0 0 0 12px rgb(34 211 238 / 0); }
+}
+
+.animate-ledger-enter { animation: ledger-enter 300ms ease-out both; }
+.animate-pressure-flash { animation: pressure-flash 850ms ease-out; }
