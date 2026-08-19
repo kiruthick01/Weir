@@ -53,6 +53,11 @@ export function DemoControls({ selectedApproverId, requestClasses, dispatch, onR
     onReset()
   }
 
+  const forceCritical = () => {
+    if (!selectedApproverId) return
+    dispatch({ type: 'FORCE_CRITICAL', approverId: selectedApproverId })
+  }
+
   const agentCycleDisabled = !selectedApproverId
   console.debug('[DemoControls] Trigger Agent Cycle disabled:', agentCycleDisabled, { selectedApproverId })
 
@@ -65,6 +70,10 @@ export function DemoControls({ selectedApproverId, requestClasses, dispatch, onR
       <Button variant="outline" disabled={!selectedApproverId} onClick={() => dispatch({ type: 'RUN_AGENT_CYCLE', approverId: selectedApproverId })}>
         <Bot className="size-4" />
         Trigger Agent Cycle
+      </Button>
+      <Button variant="outline" disabled={!selectedApproverId} onClick={forceCritical} className="border-red-500/40 text-red-300 hover:bg-red-500/10 hover:text-red-200">
+        <Zap className="size-4" />
+        Force Critical
       </Button>
       <Button variant="ghost" onClick={reset} className="text-zinc-400 hover:text-zinc-100">
         <RotateCcw className="size-4" />

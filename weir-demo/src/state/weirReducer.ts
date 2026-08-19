@@ -9,6 +9,7 @@ export type WeirAction =
   | { type: 'TICK'; now?: number }
   | { type: 'RECORD_LATENCY_SAMPLE'; approverId: string; latencyMs: number; now?: number }
   | { type: 'RUN_AGENT_CYCLE'; approverId: string; now?: number }
+  | { type: 'FORCE_CRITICAL'; approverId: string }
   | { type: 'RESET' }
 
 const id = () => `ledger-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -18,7 +19,7 @@ const terminalRequestIds = (entries: LedgerEntry[]) =>
 
 export function weirReducer(state: WeirState, action: WeirAction): WeirState {
   if (action.type === 'RESET') return createSeedState()
-  const now = action.now ?? Date.now()
+  const now = ('now' in action ? action.now : undefined) ?? Date.now()
   const approvers = state.approvers.map((approver) => ({ ...approver, latencyWindow: [...approver.latencyWindow], queue: [...approver.queue] }))
   const ledger = [...state.ledger]
 
@@ -40,6 +41,37 @@ export function weirReducer(state: WeirState, action: WeirAction): WeirState {
     const completedIds = terminalRequestIds(newEntries)
     approver.queue = approver.queue.filter((request) => !completedIds.has(request.requestId))
     return { ...state, approvers, ledger: [...ledger, ...newEntries] }
+  } else if (action.type === 'FORCE_CRITICAL') {
+    const approver = approvers.find((item) => item.id === action.approverId)
+    if (!approver) return state
+
+    // Demo-only shortcut: bypass pressure evaluation, but seed real-looking
+    // signals and eligible requests so the next normal TICK remains Critical.
+    approver.pressureState = 'critical'
+    approver.stateSince = now
+    approver.latencyWindow = [22_000, 24_000, 26_000, 28_000, 30_000]
+    approver.queue = []
+
+    const demoRequests = [
+      { className: state.requestClasses.find((item) => item.name === 'procurement_low_value'), amount: 100, age: 0.60 },
+      { className: state.requestClasses.find((item) => item.name === 'procurement_low_value'), amount: 120, age: 0.65 },
+      { className: state.requestClasses.find((item) => item.name === 'procurement_low_value'), amount: 140, age: 0.70 },
+      { className: state.requestClasses.find((item) => item.name === 'procurement_low_value'), amount: 160, age: 0.75 },
+      { className: state.requestClasses.find((item) => item.name === 'procurement_high_value'), amount: 8_500, age: 0.80 },
+      { className: state.requestClasses.find((item) => item.name === 'access_request_standard'), amount: 2_400, age: 0.85 },
+    ]
+
+    for (const [index, item] of demoRequests.entries()) {
+      if (!item.className) continue
+      const enqueuedAt = now - item.className.maxWaitSeconds * 1000 * item.age
+      approver.queue.push({
+        requestId: `force-critical-${now}-${index}`,
+        className: item.className.name,
+        amount: item.amount,
+        enqueuedAt,
+        deadline: now + item.className.maxWaitSeconds * 1000 * 0.4,
+      })
+    }
   } else if (action.type === 'RECORD_LATENCY_SAMPLE') {
     const approver = approvers.find((item) => item.id === action.approverId)
     if (!approver) return state
