@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "weir"
 version = "0.1.0"
@@ -15,13 +19,20 @@ dependencies = [
 # Only needed for WEIR_AGENT_MODE=live; the default offline mode has no
 # external dependency at all.
 live = ["anthropic>=0.40"]
-
-[dependency-groups]
+# `pip install -e ".[dev]"` -- kept as a plain extra rather than a PEP 735
+# dependency-group so it installs with any reasonably recent pip, not just
+# ones new enough to support `pip install --group`.
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
 ]
+
+[tool.setuptools.packages.find]
+# The repo root also has dashboard/, scripts/, weir-demo/, documentation/,
+# and data/ -- none of those are Python packages, so tell setuptools
+# explicitly rather than relying on (failure-prone) auto-discovery.
+include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["app/tests"]
