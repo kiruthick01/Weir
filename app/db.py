@@ -13,6 +13,13 @@ class Base(DeclarativeBase):
     pass
 
 
+# Statuses that mean "no longer needs action." Anything not in this set
+# (queued, hold) is still live and eligible for further governance or
+# timeout. Kept here as the single source of truth so the queue-lifecycle
+# code (routers + orchestrator) can't drift into checking different strings.
+TERMINAL_STATUSES = frozenset({"manually_approved", "auto_approved", "delegated", "timed_out"})
+
+
 class RequestClassModel(Base):
     __tablename__ = "request_classes"
     name: Mapped[str] = mapped_column(String(100), primary_key=True)
