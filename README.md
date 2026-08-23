@@ -1,161 +1,113 @@
-# Weir — Admission Control for Human Approval
+# Weir
 
-Weir is an admission-control layer for human approval workflows. It treats an approver as a finite-capacity resource with a measurable decision-latency curve, then governs incoming approval requests with pressure-aware queuing, bounded wait times, delegation, and constrained automation.
+**Admission control for human approvers.**
 
-The system is designed to answer not only “what happened?” but also “why was this action allowed?” Every automated action, agent proposal, policy rejection, timeout, and manual override is intended to be reconstructable from the decision ledger.
+Weir treats an overloaded approver the same way a distributed system treats an overloaded backend: watch its live latency, apply backpressure with a bounded queue, and — if the overload is sustained — delegate or auto-approve under a hard, auditable policy instead of letting requests silently rot in an inbox.
 
-## Core idea
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-live%20API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Tests](https://img.shields.io/badge/tests-10%20passing-2ea44f)](#running-the-tests)
+[![Track](https://img.shields.io/badge/hackathon-Track%203%20%C2%B7%20AI--Native%20Enterprise-6b46c1)]()
+[![License](https://img.shields.io/badge/license-unlicensed-lightgrey)]()
 
-An approver has finite decision capacity. As recent decision latency and queue pressure increase, Weir moves through three states:
+<p align="center">
+  <img src="documentation/dashboard-overview.png" alt="Weir dashboard — three approvers showing critical pressure, live queue depth, and decision outcomes" width="850">
+</p>
 
-```text
-Normal  ->  Elevated  ->  Critical
+<p align="center"><sub>Live screenshot: three approvers under real synthetic load, driven entirely by <code>scripts/simulate_requests.py</code> against the actual FastAPI backend below — nothing in this README is mocked.</sub></p>
+
+---
+
+## The problem
+
+Every enterprise approval tool — procurement sign-off, expense approval, access requests, contract review — treats a slow approver as an inbox-design problem. Better notifications. Smarter routing. A nicer dashboard.
+
+None of that addresses the actual failure mode: **an approver is a finite-capacity resource with a measurable decision-latency curve** — functionally identical to a GPU with a finite KV-cache serving inference requests. When they're oversubscribed, requests don't fail loudly. They silently pile up, latency creeps up for everyone waiting behind them, and nobody has a signal that it's happening until someone escalates in frustration.
+
+Weir is an admission-control layer that sits in front of any approval-driven workflow and governs load the way a capacity-aware proxy governs traffic to a constrained backend: live pressure signal, bounded queueing, and — only under sustained overload — delegation or constrained auto-approval, with every intervention logged and explainable.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[New approval request] --> B[Pressure evaluation]
+    B -->|Normal| C[Pass straight through]
+    B -->|Elevated| D[Bounded queue, tracked deadline]
+    B -->|Sustained Critical| E[Governance Agent]
+    E -->|propose| F[Deterministic policy validation]
+    F -->|approved| G[Committed decision + ledger entry]
+    F -->|rejected| H[rejected_proposal ledger entry]
+    H -->|one retry| E
 ```
 
-Pressure transitions use consecutive observations, cooldown, and hysteresis so noisy measurements do not cause state flapping. The deterministic policy engine selects admission behavior, while the governance agent is invoked only when sustained pressure needs contextual reasoning.
+Each approver's pressure state — **Normal → Elevated → Critical** — is computed from a rolling window of decision-latency samples, with consecutive-sample requirements and hysteresis so one noisy reading doesn't flip the state back and forth. Two signals feed that window: the *real* one (how long a request actually took to get decided, once it's resolved) and a *live* one (how long the oldest thing still sitting in the queue has already been waiting) — the second is what lets pressure climb visibly from backlog alone, which matters because a demo — or a real incident — can't wait around for decisions to complete before the system notices something is wrong.
 
-The governance agent is proposal-only:
+The **Governance Agent** only gets involved once pressure is genuinely sustained in Critical. It runs in one of two modes:
 
-```text
-request
-  -> pressure evaluation
-  -> deterministic action selection
-  -> queue / pass / timeout eligibility
-  -> agent proposal when pressure requires reasoning
-  -> deterministic validation
-  -> committed decision or rejected_proposal audit event
-```
+- **Offline** (default, zero external dependencies) — a deterministic policy stand-in: auto-approve low-risk requests under their configured value threshold, delegate everything else to a backup approver who isn't also critical, escalate to a human if no safe backup exists.
+- **Live** (`WEIR_AGENT_MODE=live`) — the same decision space, reasoned over by Claude with a small tool set (`get_approver_pressure`, `get_queue_state`, `get_backup_approvers`, `get_policy`, `get_recent_decisions` to read; `propose_delegate`, `propose_auto_approve`, `propose_escalate_to_human`, `propose_hold` to act).
 
-The agent never writes to the ledger and never mutates approval state directly.
+**The agent never writes to the ledger and never mutates approval state.** Every proposal — from either mode — passes through the same deterministic `policy_engine.validate_proposal`, which checks risk tier, value threshold, delegation-chain legality, and an hourly auto-approval rate limit. A rejection isn't discarded: it's logged as a first-class `rejected_proposal` ledger entry, gets exactly one constrained retry, and stays visible in the dashboard as "agent proposed X, policy said no" — the strongest available answer to "why should I trust this."
 
-## Local hackathon stack
-
-This build is intentionally runnable on one machine without external infrastructure:
-
-- FastAPI provides the HTTP API and serves the dashboard.
-- SQLite, through SQLAlchemy, stores request classes, approvers, approval requests, and decisions.
-- `app/state_store.py` provides an asyncio-lock-protected in-process replacement for Redis. It stores rolling decision latency, pressure state, and deadline-ordered queues.
-- `app/policy_engine.py` contains the readable deterministic state machine for pressure evaluation, action selection, and proposal validation.
-- `app/governance_agent.py` provides Anthropic live mode and a deterministic offline mode.
-- `dashboard/static/` contains the framework-free dashboard: plain HTML, CSS, and JavaScript polling with `fetch()`.
-
-## Setup
-
-From the repository root:
+## Quickstart
 
 ```bash
-python -m venv .venv
-```
+git clone https://github.com/kiruthick01/Weir.git
+cd Weir
+python3.13 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 
-Activate the environment:
-
-```bash
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-# macOS/Linux
-source .venv/bin/activate
-```
-
-Install the declared Python dependencies:
-
-```bash
-pip install -e .
-```
-
-If using a requirements file in your deployment checkout, the equivalent command is:
-
-```bash
-pip install -r requirements.txt
-```
-
-Configure environment variables as needed:
-
-```dotenv
-WEIR_DATABASE_URL=sqlite:///./data/weir.db
-WEIR_AGENT_MODE=offline
-WEIR_ADMIN_API_KEY=dev-admin-key
-POLICY_STATE_COOLDOWN_SECONDS=60
-POLICY_STATE_CONSECUTIVE_SAMPLES=2
-POLICY_STATE_HYSTERESIS_PCT=10
-```
-
-Live Anthropic mode additionally requires an API key supported by the Anthropic SDK and:
-
-```dotenv
-WEIR_AGENT_MODE=live
-ANTHROPIC_API_KEY=your-key
-```
-
-Seed the local database:
-
-```bash
-python scripts/seed.py
-```
-
-The seed creates five example approvers, reciprocal backup pairs, and three request classes. It is idempotent and updates existing seed rows by their stable keys.
-
-Start the API from the repository root:
-
-```bash
+pip install -e ".[dev]"            # add "live" too if you'll use WEIR_AGENT_MODE=live
+python scripts/seed.py             # 5 approvers, 3 reciprocal backup pairs, 3 request classes
 uvicorn main:app --reload --port 8080
 ```
 
-Open the dashboard at [http://localhost:8080](http://localhost:8080).
+Open **http://localhost:8080** — the dashboard is served directly by the API, no separate frontend build.
 
-> If the application is packaged under a `service/` directory in a later deployment layout, the equivalent command is `uvicorn app.main:app --reload --port 8080` from that service directory.
-
-## Live demo
-
-In a second terminal, from the repository root:
-
-```bash
-python scripts/simulate_requests.py --ramp --rate 3 --duration 180
-```
-
-The simulator posts synthetic requests and prints each response's status and pressure state inline. It randomizes request classes and payload amounts, including values both below and above the low-value auto-approval threshold.
-
-To stress one approver specifically:
+In a second terminal, make one approver visibly overloaded:
 
 ```bash
 python scripts/simulate_requests.py \
   --approver-email alice.approver@example.com \
-  --ramp --rate 3 --duration 180
+  --ramp --rate 4 --duration 60
 ```
 
-Ramp mode deliberately does not simulate approvers completing requests. This is intentional for the stage demo: the queue is allowed to build, latency pressure remains visible, and the selected approver can progress from Normal to Elevated to Critical.
+Ramp mode never simulates the approver actually deciding anything — the queue is meant to visibly build. Within a few seconds you should see Alice's pressure move Normal → Elevated → Critical on the dashboard, her queue depth climb, and — once Critical — the decision ledger start filling with real `delegated` and `auto_approved` entries as the governance agent kicks in.
 
-Available simulator options:
+### Running the tests
 
-```text
---rate REQUESTS_PER_SECOND   default: 1
---duration SECONDS            default: 120
---api-url URL                 default: http://localhost:8080
---approver-email EMAIL        target one seeded approver
---ramp                        increase traffic over the run
+```bash
+pytest
 ```
 
-## Dashboard
+10 tests, covering the deterministic policy engine (pressure ramp/hysteresis, proposal validation, rate limiting) and the full request lifecycle end to end through the real FastAPI app (queue/approver consistency on every terminal decision, delegation actually moving a request to its backup, pressure genuinely rising from backlog, sustained-critical pressure genuinely producing an auto-approval).
 
-The dashboard is served directly from `/` with no frontend build step. It provides:
+## Watching it work
 
-- Live/degraded health indicator from `/healthz` and `/readyz`.
-- One pressure card per approver with name, pressure state, p50 latency, queue depth, and state age.
-- Selected-approver queue with deadline countdowns and overdue highlighting.
-- Force Approve and Force Reassign controls using the admin key prompted on first use.
-- The newest 50 decision-ledger entries.
-- Expandable agent reasoning for agent-involved decisions.
-- Visually distinct `rejected_proposal` entries so “agent proposed X, policy said no” remains visible as a trust signal.
+<p align="center">
+  <img src="documentation/dashboard-approvers.png" alt="Approver table showing per-approver pressure state, p50 latency, and queue depth" width="800">
+</p>
+
+Every approver's live pressure state, p50 decision latency, and queue depth, at a glance — click a row to inspect that approver's queue.
+
+<p align="center">
+  <img src="documentation/dashboard-queue.png" alt="Bounded queue view with live deadline countdowns and manual override controls" width="800">
+</p>
+
+The bounded queue for one approver, with live deadline countdowns and manual **Force Approve** / **Force Reassign** overrides — both admin-key-protected, and both write through the same latency/queue bookkeeping as an automated decision, so the dashboard never drifts from reality no matter who (or what) resolves a request.
+
+<p align="center">
+  <img src="documentation/dashboard-ledger.png" alt="Decision ledger filtered to one approver, showing delegated outcomes with expandable agent reasoning" width="800">
+</p>
+
+The decision ledger, filtered to one approver — every automated `delegated` decision here carries expandable agent reasoning, so "why did this happen" is always one click away.
 
 ## API surface
 
-### Requests
+**Requests**
 
-`POST /v1/requests`
-
-Creates or idempotently returns an approval request. The body is:
-
-```json
+```http
+POST /v1/requests
 {
   "source_system": "procurement",
   "external_ref": "po-123",
@@ -164,123 +116,81 @@ Creates or idempotently returns an approval request. The body is:
   "payload": {"amount": 420, "currency": "USD"}
 }
 ```
-
-The response contains:
-
 ```json
-{
-  "request_id": "...",
-  "status": "queued",
-  "pressure_state": "normal",
-  "estimated_wait_seconds": 300
-}
+{"request_id": "...", "status": "queued", "pressure_state": "normal", "estimated_wait_seconds": 300}
 ```
 
-### Approvers and queues
+**Approvers & queues** — `GET /v1/approvers`, `GET /v1/approvers/{id}/status`, `GET /v1/approvers/{id}/queue`
 
-```text
-GET /v1/approvers
-GET /v1/approvers/{id}/status
-GET /v1/approvers/{id}/queue
+**Decision ledger** — `GET /v1/decisions/recent?limit=&offset=&approver_id=`, `POST /v1/decisions/{request_id}/override` *(requires `X-Admin-Key`; rejects an already-resolved request with 409 instead of double-logging)*
+
+**Policy config** — `GET /v1/config/policy`, `PUT /v1/config/policy` *(requires `X-Admin-Key`; validates risk tier and positive/non-negative values)*
+
+**Operations** — `GET /healthz`, `GET /readyz`, `GET /metrics` *(Prometheus text: pressure gauge, queue-depth gauge, and decision counters per approver)*
+
+## Configuration
+
+```dotenv
+WEIR_DATABASE_URL=sqlite:///./data/weir.db
+WEIR_AGENT_MODE=offline                        # or "live" (+ ANTHROPIC_API_KEY)
+WEIR_ADMIN_API_KEY=dev-admin-key
+WEIR_THRESHOLD_ELEVATED_MS=1000
+WEIR_THRESHOLD_CRITICAL_MS=3000
+POLICY_STATE_CONSECUTIVE_SAMPLES=2
+POLICY_STATE_HYSTERESIS_PCT=10
+POLICY_STATE_COOLDOWN_SECONDS=60               # gates recovery only — worsening pressure is never delayed
+WEIR_AUTO_APPROVE_RATE_LIMIT_PER_HOUR=10
+WEIR_AGENT_REINVOKE_SECONDS=45                 # re-run the agent on this cadence while sustained critical
 ```
 
-Status includes pressure state, p50 decision latency, queue depth, and state-since timestamp. Queue entries include request ID, source system, request class, enqueue time, deadline, and remaining time.
+### Default seeded policy
 
-### Decision ledger
-
-```text
-GET  /v1/decisions/recent?limit=50&offset=0&approver_id=optional
-POST /v1/decisions/{request_id}/override
-```
-
-Override requests require:
-
-```text
-X-Admin-Key: <WEIR_ADMIN_API_KEY>
-```
-
-The override body is either:
-
-```json
-{"action": "force_approve", "reason": "business owner confirmed"}
-```
-
-or:
-
-```json
-{
-  "action": "force_reassign",
-  "target_approver_id": "backup-id",
-  "reason": "primary approver unavailable"
-}
-```
-
-Manual decisions are recorded with a `manual_override: ` reason prefix.
-
-### Policy configuration
-
-```text
-GET /v1/config/policy
-PUT /v1/config/policy
-```
-
-Policy updates require `X-Admin-Key` and can update `max_wait_seconds`, `auto_approve_threshold`, and `risk_tier` for a request class.
-
-### Operations
-
-```text
-GET /healthz
-GET /readyz
-GET /metrics
-```
-
-`/readyz` checks that the SQLite database connection works. `/metrics` emits hand-formatted Prometheus text with pressure gauges, queue-depth gauges, and decision counters.
-
-## Default seeded policy
-
-| Request class | Max wait | Auto-approve threshold | Risk tier |
+| Request class | Max wait | Auto-approve under | Risk tier |
 |---|---:|---:|---|
-| `procurement_low_value` | 300 seconds | 1000 | low |
-| `procurement_high_value` | 1800 seconds | disabled | high |
-| `access_request_standard` | 600 seconds | disabled | medium |
+| `procurement_low_value` | 300s | 1000 | low |
+| `procurement_high_value` | 1800s | disabled | high |
+| `access_request_standard` | 600s | disabled | medium |
 
-Auto-approval is only eligible for permitted risk tiers, values under the configured threshold, and approvers who have not exceeded the hourly auto-approval limit. Delegation is only legal to the configured backup approver.
+## Fail-open, by design
 
-## Fail-open behavior
+Weir is built so a state-store or agent outage degrades gracefully instead of turning into an approval outage:
 
-Weir is designed not to turn a state-store or agent outage into an approval outage:
-
-- State and agent failures are logged as degraded-mode events.
-- Requests continue through the minimum safe queue path.
-- An unavailable governance agent produces no proposals and does not write decisions.
-- Proposal validation failures are recorded as first-class `rejected_proposal` entries.
-- Each rejected proposal gets at most one constrained fallback attempt.
-- Timed-out queue entries receive explicit `timed_out` ledger decisions.
+- An unavailable governance agent produces zero proposals and writes zero decisions — it fails open, logged, and the deterministic queue path continues unaffected.
+- Every rejected proposal is a first-class, visible ledger entry, not a silent drop.
+- Timed-out queue entries get an explicit `timed_out` decision the moment their deadline passes.
+- Delegation is only ever legal to the approver's configured backup (agent path); the manual admin override can reassign anywhere, since a human is already vouching for it.
 
 ## Repository layout
 
 ```text
 app/
-  db.py                 SQLAlchemy models and SQLite session setup
-  governance_agent.py   Offline/live proposal-only governance agent
-  orchestrator.py       Agent, policy, state, and ledger coordination
-  policy_engine.py      Deterministic pressure/action/validation logic
-  settings.py           Environment-backed application settings
-  state_store.py        In-process Redis-shaped live-state store
-  routers/              FastAPI request, approver, decision, config, and ops APIs
-  tests/                Policy engine tests
-dashboard/static/       Single-page dashboard assets
-scripts/                Database seeding and traffic simulation
-main.py                 FastAPI application and router/static wiring
+  db.py                 SQLAlchemy models, TERMINAL_STATUSES, session setup
+  state_store.py         Async in-process store: latency windows, pressure state,
+                          deadline-ordered queues -- shaped to swap in Redis later
+  policy_engine.py        Deterministic, readable state machine: pressure eval,
+                          admission action, proposal validation
+  governance_agent.py     Proposal-only agent -- offline stand-in + live Claude mode
+  orchestrator.py         Wires agent proposals -> validation -> ledger -> queue,
+                          consistently, whether the proposal is committed or rejected
+  routers/                request / approver / decision / config / ops APIs
+  tests/                  10 tests: policy engine + full-stack lifecycle
+dashboard/static/         Single-page dashboard: plain HTML/CSS/JS, no build step
+scripts/                  seed.py, simulate_requests.py
+weir-demo/                Standalone client-side (Vite/React) presentation demo --
+                          simulates the same pipeline in-browser, no backend needed
+main.py                   FastAPI app + router/static wiring
 ```
 
 ## What's simplified vs. the full design
 
-These are intentional hackathon-scope swap points for Phase 2 hardening:
+Intentional hackathon-scope swap points, called out rather than hidden:
 
-- SQLite → Postgres for production durability, concurrency, migrations, and operational tooling.
-- In-process state store → Redis for rolling windows, pressure state, and queues shared across replicas.
-- Static dashboard → Next.js for a separately built production frontend with richer navigation and authentication UX.
+- **SQLite → Postgres** for production durability, concurrency, and migrations.
+- **In-process state store → Redis** so pressure/queue state is shared across replicas instead of living in one process.
+- **Static dashboard → a separately built production frontend** with richer navigation and real auth.
 
-The policy engine is intentionally not simplified into a rules DSL or opaque service. Its plain Python state machine is a core design requirement and should remain easy for a judge, operator, or auditor to read.
+The policy engine is deliberately *not* a rules DSL or an opaque service — it's plain, readable Python, on purpose. Explainability is the actual product; a black-box policy engine would defeat the point.
 
+---
+
+<sub>Built for **Track 3 — AI-Native Enterprise (Open)**: a direct port of production-shaped distributed-systems admission control (pressure states, hysteresis, bounded queueing) onto an overloaded human instead of an overloaded inference backend.</sub>

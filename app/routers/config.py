@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,7 +17,21 @@ class PolicyUpdate(BaseModel):
     request_class: str
     max_wait_seconds: int | None = None
     auto_approve_threshold: float | None = None
-    risk_tier: str | None = None
+    risk_tier: Literal["low", "medium", "high"] | None = None
+
+    @field_validator("max_wait_seconds")
+    @classmethod
+    def _positive_wait(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("max_wait_seconds must be positive")
+        return value
+
+    @field_validator("auto_approve_threshold")
+    @classmethod
+    def _non_negative_threshold(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("auto_approve_threshold must be non-negative")
+        return value
 
 
 @router.get("/policy")

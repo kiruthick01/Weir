@@ -10,9 +10,21 @@ from typing import Any
 from sqlalchemy import func, select
 
 from . import governance_agent, policy_engine
-from .db import ApprovalRequestModel, ApproverModel, DecisionModel, RequestClassModel, add_decision
+from .db import (
+    TERMINAL_STATUSES,
+    ApprovalRequestModel,
+    ApproverModel,
+    DecisionModel,
+    RequestClassModel,
+    add_decision,
+)
 
 logger = logging.getLogger(__name__)
+
+# Outcomes that mean the request no longer needs to sit in anyone's live
+# queue. "queued" (escalate) and "hold" leave the request exactly where it
+# was -- the agent explicitly chose not to resolve it.
+_QUEUE_RESOLVING_OUTCOMES = {"delegated", "auto_approved"}
 
 
 class _AgentDb:
@@ -65,19 +77,56 @@ def _policy_config(settings: Any) -> policy_engine.PolicyConfig:
 
 
 async def _commit_proposal(proposal, request, request_class, approver, session, wrapped_store, settings):
+    """Validate and, if allowed, commit one proposal.
+
+    Returns ``(committed, rejection_reason)``. On commit, this is the single
+    place that keeps the ledger, the request's ``approver_id``/status, and
+    the live queue/latency state in the state store all consistent with each
+    other -- previously only the timeout sweep ever removed a request from
+    its queue, so every agent-resolved request (delegated or auto-approved)
+    stayed stuck in the approver's live queue forever.
+    """
     validation = await policy_engine.validate_proposal(proposal, request, request_class, approver, wrapped_store, _policy_config(settings))
     if not validation.ok:
         add_decision(session, request.request_id, approver.approver_id, "rejected_proposal", validation.reason, proposal.reason)
-        return False
+        return False, validation.reason
+
     outcomes = {"propose_delegate": "delegated", "propose_auto_approve": "auto_approved", "propose_escalate_to_human": "queued", "propose_hold": "hold"}
     outcome = outcomes[proposal.kind]
     reason = proposal.reason if proposal.kind != "propose_escalate_to_human" else f"escalated_to_human: {proposal.reason}"
     add_decision(session, request.request_id, approver.approver_id, outcome, reason, proposal.reason)
+
     request_model = session.get(ApprovalRequestModel, request.request_id)
     if request_model:
         request_model.status = outcome
+        if outcome == "delegated" and proposal.target_approver_id:
+            request_model.approver_id = proposal.target_approver_id
         session.commit()
-    return True
+
+    if outcome in _QUEUE_RESOLVING_OUTCOMES:
+        now = datetime.now(timezone.utc)
+        submitted_at = request.submitted_at
+        if submitted_at.tzinfo is None:
+            submitted_at = submitted_at.replace(tzinfo=timezone.utc)
+        elapsed_ms = max(0, int((now - submitted_at).total_seconds() * 1000))
+        # This is the "real" decision-latency signal: how long the original
+        # approver actually took to have this request resolved off their
+        # plate, whether by auto-approval or by handing it to a backup.
+        await wrapped_store.record_decision_latency(approver.approver_id, elapsed_ms)
+
+        if outcome == "delegated" and proposal.target_approver_id:
+            deadline = await wrapped_store.deadline_for(approver.approver_id, request.request_id)
+            await wrapped_store.dequeue(approver.approver_id, request.request_id)
+            if deadline is not None:
+                # Preserve the original SLA deadline, but reset the backup's
+                # own "how long has this been sitting with me" clock to now
+                # -- they shouldn't inherit the original approver's backlog
+                # age as if it were their own slowness.
+                await wrapped_store.enqueue(proposal.target_approver_id, request.request_id, deadline, enqueued_at=now)
+        else:
+            await wrapped_store.dequeue(approver.approver_id, request.request_id)
+
+    return True, None
 
 
 async def handle_pressure_transition(approver_id: str, db_session: Any, state_store: Any, mode: str) -> None:
@@ -97,24 +146,31 @@ async def handle_pressure_transition(approver_id: str, db_session: Any, state_st
 
         for proposal in proposals:
             request_model = db_session.get(ApprovalRequestModel, proposal.request_id)
-            if not request_model:
+            if not request_model or request_model.status in TERMINAL_STATUSES:
+                # Already resolved -- e.g. a human used Force Approve on the
+                # dashboard while this batched agent pass was in flight.
                 continue
             request_class_model = db_session.get(RequestClassModel, request_model.request_class_name)
             request = _request(request_model)
             request_class = _request_class(request_class_model)
-            validation = await policy_engine.validate_proposal(proposal, request, request_class, approver, wrapped_store, _policy_config(settings))
-            if validation.ok:
-                await _commit_proposal(proposal, request, request_class, approver, db_session, wrapped_store, settings)
+            committed, rejection_reason = await _commit_proposal(
+                proposal, request, request_class, approver, db_session, wrapped_store, settings
+            )
+            if committed:
                 continue
-            add_decision(db_session, request.request_id, approver.approver_id, "rejected_proposal", validation.reason, proposal.reason)
-            fallback = await governance_agent.retry_rejected_proposal(proposal, validation.reason, {"request_id": request.request_id, "payload": request.payload, "request_class": request_class_model.name}, mode)
+            fallback = await governance_agent.retry_rejected_proposal(
+                proposal,
+                rejection_reason or "",
+                {"request_id": request.request_id, "payload": request.payload, "request_class": request_class_model.name},
+                mode,
+            )
             if fallback is not None:
                 await _commit_proposal(fallback, request, request_class, approver, db_session, wrapped_store, settings)
 
         now = datetime.now(timezone.utc)
         for request_id in await state_store.timed_out_requests(approver_id, now):
             request_model = db_session.get(ApprovalRequestModel, request_id)
-            if request_model and request_model.status not in {"approved", "auto_approved", "delegated", "timed_out"}:
+            if request_model and request_model.status not in TERMINAL_STATUSES:
                 add_decision(db_session, request_id, approver_id, "timed_out", "request deadline exceeded")
                 request_model.status = "timed_out"
                 db_session.commit()

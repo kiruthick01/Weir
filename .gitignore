@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+.venv*
+
+# Local runtime state (seeded/demo SQLite db)
+data/

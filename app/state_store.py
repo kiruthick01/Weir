@@ -21,6 +21,7 @@ DEFAULT_LATENCY_WINDOW_SECONDS = 15 * 60
 DEFAULT_LATENCY_SAMPLE_COUNT = 50
 DEFAULT_POLICY_STATE_COOLDOWN_SECONDS = 60
 PRESSURE_STATES = frozenset({"normal", "elevated", "critical"})
+_PRESSURE_SEVERITY = {"normal": 0, "elevated": 1, "critical": 2}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +81,16 @@ class StateStore:
         self._pressure_states: dict[str, _PressureState] = {}
         self._queues: dict[str, list[tuple[datetime, int, str]]] = defaultdict(list)
         self._queued_deadlines: dict[str, dict[str, datetime]] = defaultdict(dict)
+        self._queued_enqueued_at: dict[str, dict[str, datetime]] = defaultdict(dict)
         self._queue_sequence = 0
         self._lock = asyncio.Lock()
+
+        # Pressure-evaluation bookkeeping, owned by the store instance instead
+        # of a module-level global so it is lock-protected, cannot leak across
+        # unrelated StateStore instances, and cannot be corrupted by CPython
+        # reusing a garbage-collected instance's id().
+        self._consecutive_observations: dict[str, dict[str, int]] = defaultdict(dict)
+        self._last_agent_run: dict[str, datetime] = {}
 
     @staticmethod
     def _utc_now() -> datetime:
@@ -156,8 +165,20 @@ class StateStore:
     ) -> bool:
         """Set pressure state if valid and outside the transition cooldown.
 
-        Returns ``True`` only when the stored state actually changed (including
-        the first state written for an approver).
+        The cooldown only gates *downgrades* (critical -> elevated -> normal,
+        i.e. things look like they're recovering) -- that's the direction
+        where flapping actually matters, and where you want to be sure the
+        improvement is real before declaring it. An *upgrade* (things are
+        getting worse) always applies immediately once the policy engine's
+        consecutive-sample/hysteresis conditions are met: an overloaded
+        approver should never wait out a cooldown clock to be recognized as
+        overloaded. This also means an approver's very first pressure
+        evaluation -- which always writes an implicit "normal" baseline --
+        can't accidentally arm a minute-long cooldown that delays the first
+        *real* transition.
+
+        Returns ``True`` only when the stored state actually changed
+        (including the first state written for an approver).
         """
         state = state.lower()
         if state not in PRESSURE_STATES:
@@ -168,20 +189,37 @@ class StateStore:
             if current is not None:
                 if current.state == state:
                     return False
-                elapsed = (now - current.last_transition_at).total_seconds()
-                if elapsed < self.policy_state_cooldown_seconds:
-                    return False
+                is_upgrade = _PRESSURE_SEVERITY[state] > _PRESSURE_SEVERITY[current.state]
+                if not is_upgrade:
+                    elapsed = (now - current.last_transition_at).total_seconds()
+                    if elapsed < self.policy_state_cooldown_seconds:
+                        return False
             self._pressure_states[approver_id] = _PressureState(state, now)
             return True
 
     async def enqueue(
-        self, approver_id: str, request_id: str, deadline: datetime
+        self,
+        approver_id: str,
+        request_id: str,
+        deadline: datetime,
+        *,
+        enqueued_at: datetime | None = None,
     ) -> None:
-        """Add or update a request in the approver's deadline-ordered queue."""
+        """Add or update a request in the approver's deadline-ordered queue.
+
+        ``enqueued_at`` defaults to now and drives ``oldest_queue_age_ms``. A
+        transfer (delegation/reassignment) should pass ``enqueued_at=now`` so
+        the receiving approver's own pressure signal only reflects backlog
+        accrued under their ownership, not staleness inherited from whoever
+        held the request before.
+        """
         deadline = self._as_utc(deadline)
+        now = self._utc_now()
+        enqueued_at = self._as_utc(enqueued_at) if enqueued_at is not None else now
         async with self._lock:
             self._queue_sequence += 1
             self._queued_deadlines[approver_id][request_id] = deadline
+            self._queued_enqueued_at[approver_id][request_id] = enqueued_at
             heapq.heappush(
                 self._queues[approver_id],
                 (deadline, self._queue_sequence, request_id),
@@ -190,6 +228,7 @@ class StateStore:
     async def dequeue(self, approver_id: str, request_id: str) -> None:
         async with self._lock:
             self._queued_deadlines[approver_id].pop(request_id, None)
+            self._queued_enqueued_at[approver_id].pop(request_id, None)
 
     async def queue_depth(self, approver_id: str) -> int:
         async with self._lock:
@@ -202,9 +241,33 @@ class StateStore:
                 key=lambda item: (item[1], item[0]),
             )
             return [
-                {"request_id": request_id, "deadline": deadline}
+                {
+                    "request_id": request_id,
+                    "deadline": deadline,
+                    "enqueued_at": self._queued_enqueued_at[approver_id].get(request_id),
+                }
                 for request_id, deadline in entries
             ]
+
+    async def deadline_for(self, approver_id: str, request_id: str) -> datetime | None:
+        async with self._lock:
+            return self._queued_deadlines[approver_id].get(request_id)
+
+    async def oldest_queue_age_ms(self, approver_id: str, now: datetime) -> int | None:
+        """Age, in milliseconds, of the longest-waiting item still queued.
+
+        This is Weir's live-demo proxy for "decision latency": an approver
+        who is genuinely falling behind has requests visibly aging in their
+        queue even before any of them are formally decided, so pressure can
+        rise from backlog alone instead of only from completed decisions.
+        """
+        now = self._as_utc(now)
+        async with self._lock:
+            enqueued_ats = self._queued_enqueued_at[approver_id].values()
+            if not enqueued_ats:
+                return None
+            oldest = min(enqueued_ats)
+            return max(0, int((now - oldest).total_seconds() * 1000))
 
     async def timed_out_requests(
         self, approver_id: str, now: datetime
@@ -219,6 +282,36 @@ class StateStore:
                 )
                 if deadline < now
             ]
+
+    async def observe_pressure_band(self, approver_id: str, band: str) -> int:
+        """Bump the consecutive-observation counter for one metric band.
+
+        A new band for this approver resets every other band's counter to
+        zero (a fresh run starts counting over), matching the semantics the
+        policy engine previously implemented with a module-level dict. This
+        version is lock-protected and scoped to the store instance.
+        """
+        async with self._lock:
+            bands = self._consecutive_observations[approver_id]
+            bands[band] = bands.get(band, 0) + 1
+            for other_band in list(bands):
+                if other_band != band:
+                    bands[other_band] = 0
+            return bands[band]
+
+    async def should_run_agent(
+        self, approver_id: str, min_interval_seconds: float, now: datetime
+    ) -> bool:
+        """Throttle sustained-pressure agent re-invocation to roughly once
+        per ``min_interval_seconds``, using request arrivals as the clock
+        tick instead of a separate scheduler/poller process."""
+        now = self._as_utc(now)
+        async with self._lock:
+            last = self._last_agent_run.get(approver_id)
+            if last is not None and (now - last).total_seconds() < min_interval_seconds:
+                return False
+            self._last_agent_run[approver_id] = now
+            return True
 
 
 # Shared by all routers in the local single-process deployment.
