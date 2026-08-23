@@ -10,6 +10,7 @@ request to its new approver.
 from __future__ import annotations
 
 import os
+import uuid
 
 os.environ.setdefault("WEIR_DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("WEIR_AGENT_MODE", "offline")
@@ -21,36 +22,67 @@ from app.db import ApproverModel, RequestClassModel
 from main import app
 
 
+def _seeded_client(tmp_path, monkeypatch, name, **env):
+    db_path = tmp_path / f"{name}.db"
+    monkeypatch.setenv("WEIR_DATABASE_URL", f"sqlite:///{db_path}")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    test_client = TestClient(app)
+    test_client.__enter__()
+    session = app.state.session_factory()
+    alice = ApproverModel(email="alice@example.com", name="Alice")
+    bob = ApproverModel(email="bob@example.com", name="Bob")
+    session.add(alice)
+    session.add(bob)
+    session.commit()
+    session.refresh(alice)
+    session.refresh(bob)
+    alice.backup_approver_id = bob.id
+    session.add(RequestClassModel(name="low", max_wait_seconds=300, auto_approve_threshold=1000, risk_tier="low"))
+    session.commit()
+    test_client.alice_id = alice.id
+    test_client.bob_id = bob.id
+    session.close()
+    return test_client
+
+
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
-    db_path = tmp_path / "lifecycle.db"
-    monkeypatch.setenv("WEIR_DATABASE_URL", f"sqlite:///{db_path}")
-    with TestClient(app) as test_client:
-        session = app.state.session_factory()
-        alice = ApproverModel(email="alice@example.com", name="Alice")
-        bob = ApproverModel(email="bob@example.com", name="Bob")
-        session.add(alice)
-        session.add(bob)
-        session.commit()
-        session.refresh(alice)
-        session.refresh(bob)
-        alice.backup_approver_id = bob.id
-        session.add(RequestClassModel(name="low", max_wait_seconds=300, auto_approve_threshold=1000, risk_tier="low"))
-        session.commit()
-        test_client.alice_id = alice.id
-        test_client.bob_id = bob.id
-        session.close()
-        yield test_client
+    test_client = _seeded_client(tmp_path, monkeypatch, "lifecycle")
+    yield test_client
+    test_client.__exit__(None, None, None)
+
+
+@pytest.fixture()
+def fast_pressure_client(tmp_path, monkeypatch):
+    # Tiny thresholds so the backlog-age test only needs a handful of short
+    # real sleeps instead of racing the (deliberately demo-sized) defaults.
+    test_client = _seeded_client(
+        tmp_path,
+        monkeypatch,
+        "fast-pressure",
+        WEIR_THRESHOLD_ELEVATED_MS="40",
+        WEIR_THRESHOLD_CRITICAL_MS="120",
+        POLICY_STATE_CONSECUTIVE_SAMPLES="2",
+    )
+    yield test_client
+    test_client.__exit__(None, None, None)
 
 
 def _submit(client, n=1, approver_email="alice@example.com"):
     ids = []
-    for i in range(n):
+    for _ in range(n):
         response = client.post(
             "/v1/requests",
             json={
                 "source_system": "test",
-                "external_ref": f"ref-{approver_email}-{i}-{id(object())}",
+                # uuid4, not id(object()): a tight loop can have CPython
+                # reuse the same freed address for each throwaway object,
+                # which silently collapses these into duplicate external_ref
+                # values and makes every call after the first hit the
+                # idempotent-existing-request short circuit instead of
+                # actually creating a new request.
+                "external_ref": f"ref-{approver_email}-{uuid.uuid4()}",
                 "request_class": "low",
                 "approver_email": approver_email,
                 "payload": {"amount": 50},
@@ -113,12 +145,22 @@ def test_override_rejects_already_resolved_request(client):
     assert second.status_code == 409
 
 
-def test_backlog_ages_and_lifts_pressure_off_normal(client):
-    # No requests are ever decided here (mirrors the ramp demo), so the only
-    # way pressure can move off "normal" is via the backlog-age signal.
+def test_backlog_ages_and_lifts_pressure_off_normal(fast_pressure_client):
+    # No requests are ever decided here (mirrors --ramp mode in
+    # scripts/simulate_requests.py), so the only way pressure can move off
+    # "normal" is the backlog-age signal recorded in routers/requests.py:
+    # each new arrival samples how long the oldest still-queued item has
+    # been waiting. Real elapsed time is required for that, so this sleeps
+    # briefly between arrivals against a client seeded with tiny thresholds.
+    import time
+
+    client = fast_pressure_client
     _submit(client, n=1)
-    for _ in range(40):
+    for _ in range(12):
+        time.sleep(0.02)
         _submit(client, n=1)
+
     status = client.get(f"/v1/approvers/{client.alice_id}/status").json()
     assert status["latency_p50_ms"] is not None
     assert status["pressure_state"] in {"elevated", "critical"}
+    assert status["queue_depth"] == 13

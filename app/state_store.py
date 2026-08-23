@@ -21,6 +21,7 @@ DEFAULT_LATENCY_WINDOW_SECONDS = 15 * 60
 DEFAULT_LATENCY_SAMPLE_COUNT = 50
 DEFAULT_POLICY_STATE_COOLDOWN_SECONDS = 60
 PRESSURE_STATES = frozenset({"normal", "elevated", "critical"})
+_PRESSURE_SEVERITY = {"normal": 0, "elevated": 1, "critical": 2}
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,8 +165,20 @@ class StateStore:
     ) -> bool:
         """Set pressure state if valid and outside the transition cooldown.
 
-        Returns ``True`` only when the stored state actually changed (including
-        the first state written for an approver).
+        The cooldown only gates *downgrades* (critical -> elevated -> normal,
+        i.e. things look like they're recovering) -- that's the direction
+        where flapping actually matters, and where you want to be sure the
+        improvement is real before declaring it. An *upgrade* (things are
+        getting worse) always applies immediately once the policy engine's
+        consecutive-sample/hysteresis conditions are met: an overloaded
+        approver should never wait out a cooldown clock to be recognized as
+        overloaded. This also means an approver's very first pressure
+        evaluation -- which always writes an implicit "normal" baseline --
+        can't accidentally arm a minute-long cooldown that delays the first
+        *real* transition.
+
+        Returns ``True`` only when the stored state actually changed
+        (including the first state written for an approver).
         """
         state = state.lower()
         if state not in PRESSURE_STATES:
@@ -176,9 +189,11 @@ class StateStore:
             if current is not None:
                 if current.state == state:
                     return False
-                elapsed = (now - current.last_transition_at).total_seconds()
-                if elapsed < self.policy_state_cooldown_seconds:
-                    return False
+                is_upgrade = _PRESSURE_SEVERITY[state] > _PRESSURE_SEVERITY[current.state]
+                if not is_upgrade:
+                    elapsed = (now - current.last_transition_at).total_seconds()
+                    if elapsed < self.policy_state_cooldown_seconds:
+                        return False
             self._pressure_states[approver_id] = _PressureState(state, now)
             return True
 
