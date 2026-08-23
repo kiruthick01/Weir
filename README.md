@@ -1,14 +1,13 @@
 # Weir
 
-**Admission control for human approvers.**
+**Production-minded admission control for human approvers.**
 
 Weir treats an overloaded approver the same way a distributed system treats an overloaded backend: watch its live latency, apply backpressure with a bounded queue, and — if the overload is sustained — delegate or auto-approve under a hard, auditable policy instead of letting requests silently rot in an inbox.
 
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-live%20API-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Tests](https://img.shields.io/badge/tests-10%20passing-2ea44f)](#running-the-tests)
-[![Track](https://img.shields.io/badge/hackathon-Track%203%20%C2%B7%20AI--Native%20Enterprise-6b46c1)]()
-[![License](https://img.shields.io/badge/license-unlicensed-lightgrey)]()
+[![License](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative)](LICENSE)
 
 <p align="center">
   <img src="documentation/dashboard-overview.png" alt="Weir dashboard — three approvers showing critical pressure, live queue depth, and decision outcomes" width="850">
@@ -52,7 +51,7 @@ The **Governance Agent** only gets involved once pressure is genuinely sustained
 ## Quickstart
 
 ```bash
-git clone https://github.com/kiruthick01/Weir.git
+git clone https://github.com/VampiricCyborg/Weir.git
 cd Weir
 python3.13 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
@@ -181,16 +180,14 @@ weir-demo/                Standalone client-side (Vite/React) presentation demo 
 main.py                   FastAPI app + router/static wiring
 ```
 
-## What's simplified vs. the full design
+## Current architecture and roadmap
 
-Intentional hackathon-scope swap points, called out rather than hidden:
+The current implementation keeps the core policy path small and easy to run locally. These boundaries are deliberate starting points, with the following hardening work planned:
 
-- **SQLite → Postgres** for production durability, concurrency, and migrations.
-- **In-process state store → Redis** so pressure/queue state is shared across replicas instead of living in one process.
-- **Static dashboard → a separately built production frontend** with richer navigation and real auth.
+- **Postgres backend** for production durability, concurrency, and migrations beyond the current SQLite setup.
+- **Redis state store** so pressure and queue state can be shared across replicas instead of living in one process.
+- **Authentication and authorization** for admin endpoints, including SSO integration and scoped operator roles.
+- **Production dashboard** with richer navigation, deployment-ready asset builds, and operational configuration.
+- **More connectors and deployment guidance** for integrating with approval systems such as procurement, access management, and service desks.
 
 The policy engine is deliberately *not* a rules DSL or an opaque service — it's plain, readable Python, on purpose. Explainability is the actual product; a black-box policy engine would defeat the point.
-
----
-
-<sub>Built for **Track 3 — AI-Native Enterprise (Open)**: a direct port of production-shaped distributed-systems admission control (pressure states, hysteresis, bounded queueing) onto an overloaded human instead of an overloaded inference backend.</sub>
