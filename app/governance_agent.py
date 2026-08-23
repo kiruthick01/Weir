@@ -275,26 +275,35 @@ async def _build_context(approver_id: str, db_session: Any, state_store: Any) ->
 
 
 def _offline_proposals(context: dict[str, Any]) -> list[Proposal]:
+    """Deterministic stand-in for the live LLM pass.
+
+    F5/F6 in the architecture doc tie delegation and auto-approval to
+    *sustained Critical* pressure specifically -- Elevated just means
+    "queue with a bounded wait," no agent action expected yet. This
+    function is only ever invoked once pressure is already elevated or
+    critical (the caller gates on that), so it only needs to check which
+    of those two it is; it previously *also* required each individual
+    request to have personally waited 50% of its own request-class SLA
+    (5-30 minutes for the seeded classes) before being eligible, which
+    starved the whole feature during any demo shorter than several
+    minutes -- pressure could reach Critical in seconds, but nothing
+    would ever actually get delegated or auto-approved. Once an approver
+    is genuinely in sustained Critical, every request currently sitting
+    in their queue is a legitimate candidate: that's the entire point of
+    "sustained" being evaluated at the approver level already, upstream.
+    """
+    if context["approver_pressure"]["state"] != "critical":
+        return []
+
     backups = context["backup_approvers"]
     backup = next((item for item in backups if item["pressure"]["state"] != "critical"), None)
     proposals = []
     for item in context["queue"]:
         policy = item.get("policy") or context["policies"].get(item["request_class"], {})
-        max_wait = _value(policy, "max_wait_seconds")
-        waited_fraction = None
-        if max_wait and item.get("enqueue_time"):
-            enqueue_time = item["enqueue_time"]
-            if isinstance(enqueue_time, str):
-                enqueue_time = datetime.fromisoformat(enqueue_time)
-            if isinstance(enqueue_time, datetime) and enqueue_time.tzinfo is None:
-                enqueue_time = enqueue_time.replace(tzinfo=timezone.utc)
-            waited_fraction = (datetime.now(timezone.utc) - enqueue_time).total_seconds() / max_wait
-        if waited_fraction is None or waited_fraction < 0.50:
-            continue
         amount = (item.get("payload_summary") or {}).get("amount")
         threshold = _value(policy, "auto_approve_threshold")
         if threshold is not None and amount is not None and amount <= threshold:
-            proposals.append(propose_auto_approve(item["request_id"], "offline policy: low-value request past critical wait trigger"))
+            proposals.append(propose_auto_approve(item["request_id"], "offline policy: low-value request under sustained critical pressure"))
         elif backup is not None:
             proposals.append(propose_delegate(item["request_id"], backup["approver_id"], "offline policy: backup is not critical"))
         else:

@@ -163,4 +163,25 @@ def test_backlog_ages_and_lifts_pressure_off_normal(fast_pressure_client):
     status = client.get(f"/v1/approvers/{client.alice_id}/status").json()
     assert status["latency_p50_ms"] is not None
     assert status["pressure_state"] in {"elevated", "critical"}
-    assert status["queue_depth"] == 13
+    # queue_depth <= 13 rather than == 13: once pressure reaches critical,
+    # the (synchronously-run-in-tests) background governance pass is
+    # expected to start auto-approving these low-value, under-threshold
+    # requests off the queue -- see test_critical_pressure_triggers_agent
+    # for a direct assertion on that behavior.
+    assert status["queue_depth"] <= 13
+
+
+def test_critical_pressure_triggers_offline_auto_approval(fast_pressure_client):
+    # Closes the loop end to end: sustained critical pressure should not
+    # just be a dashboard number -- it should visibly start resolving the
+    # backlog, which is the actual point of the whole project.
+    import time
+
+    client = fast_pressure_client
+    for _ in range(15):
+        time.sleep(0.02)
+        _submit(client, n=1)
+
+    ledger = client.get(f"/v1/decisions/recent?limit=200&approver_id={client.alice_id}").json()
+    outcomes = {item["outcome"] for item in ledger["items"]}
+    assert "auto_approved" in outcomes

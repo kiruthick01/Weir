@@ -1,7 +1,7 @@
 [project]
 name = "weir"
 version = "0.1.0"
-description = "Add your description here"
+description = "Admission control for human approvers -- pressure-aware queueing, delegation, and constrained auto-approval for enterprise approval workflows."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,3 +10,19 @@ dependencies = [
     "sqlalchemy>=2.0",
     "uvicorn>=0.30",
 ]
+
+[project.optional-dependencies]
+# Only needed for WEIR_AGENT_MODE=live; the default offline mode has no
+# external dependency at all.
+live = ["anthropic>=0.40"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+asyncio_mode = "strict"
