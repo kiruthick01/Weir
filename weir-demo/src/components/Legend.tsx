@@ -1,6 +1,15 @@
-import { CircleAlert, CircleCheck, CircleDashed, GitBranch, OctagonAlert, TriangleAlert } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
-
 export function Legend() {
-  return <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-zinc-500"><span className="font-semibold uppercase tracking-widest text-zinc-400">Legend</span><span className="flex items-center gap-1.5 text-emerald-300"><CircleCheck className="size-3.5" /> Normal</span><span className="flex items-center gap-1.5 text-amber-300"><TriangleAlert className="size-3.5" /> Elevated</span><span className="flex items-center gap-1.5 text-red-300"><OctagonAlert className="size-3.5" /> Critical</span><Badge className="border-slate-500/30 bg-slate-500/15 text-slate-300"><CircleDashed className="size-3.5" /> queued</Badge><Badge className="border-blue-500/30 bg-blue-500/15 text-blue-300"><GitBranch className="size-3.5" /> delegated</Badge><Badge className="border-emerald-500/30 bg-emerald-500/15 text-emerald-300"><CircleCheck className="size-3.5" /> auto-approved</Badge><Badge className="border-orange-500/50 bg-orange-500/10 text-orange-300"><CircleAlert className="size-3.5" /> rejected proposal</Badge></div>
+  return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-3 font-mono text-[11px] uppercase tracking-wide text-muted">
+      <span className="font-sans font-bold text-ink">Legend</span>
+      <span>normal</span>
+      <span className="font-bold">elevated</span>
+      <span className="font-bold text-accent">critical</span>
+      <span className="text-line">|</span>
+      <span>queued</span>
+      <span>delegated</span>
+      <span>auto approved</span>
+      <span className="text-accent">rejected proposal</span>
+    </div>
+  )
 }
