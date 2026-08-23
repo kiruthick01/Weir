@@ -41,16 +41,37 @@ async def create_request(body: RequestBody, request: Request, background_tasks: 
     db.commit()
     db.refresh(record)
 
+    state_store = request.app.state.state_store
     settings = request.app.state.settings
+
+    # Weir's live-demo proxy for "decision latency": before this new request
+    # joins the queue, sample how long the approver's existing backlog has
+    # already been sitting. This is what lets pressure climb purely from
+    # accumulating, undecided requests -- the exact scenario the ramp demo
+    # exercises (see scripts/simulate_requests.py --ramp) -- rather than
+    # requiring decisions to complete before the signal moves at all.
+    backlog_age_ms = await state_store.oldest_queue_age_ms(approver.id, now)
+    if backlog_age_ms is not None:
+        await state_store.record_decision_latency(approver.id, backlog_age_ms)
+
     thresholds = PressureThresholds(settings.threshold_elevated_ms, settings.threshold_critical_ms, settings.policy_state_consecutive_samples, settings.policy_state_hysteresis_pct)
-    pressure = await policy_engine.evaluate_pressure(approver.id, request.app.state.state_store, thresholds)
-    if pressure.transitioned and pressure.state in {"elevated", "critical"}:
+    pressure = await policy_engine.evaluate_pressure(approver.id, state_store, thresholds)
+
+    # Run the governance agent immediately on a fresh transition into
+    # elevated/critical, and keep re-running it on a throttled cadence while
+    # pressure stays sustained -- otherwise delegation/auto-approval only
+    # ever fire once, right at the first transition, and never again for the
+    # rest of the backlog that piles up afterward.
+    should_trigger_agent = pressure.transitioned and pressure.state in {"elevated", "critical"}
+    if not should_trigger_agent and pressure.state in {"elevated", "critical"}:
+        should_trigger_agent = await state_store.should_run_agent(approver.id, settings.agent_reinvoke_seconds, now)
+    if should_trigger_agent:
         background_tasks.add_task(_background_transition, request.app.state, approver.id)
 
     request_class_policy = policy_engine.RequestClass(request_class.max_wait_seconds, request_class.risk_tier, request_class.auto_approve_threshold)
-    action = await policy_engine.select_action(policy_engine.ApprovalRequest(record.id, approver.id, body.payload, now), request_class_policy, pressure, request.app.state.state_store, policy_engine.PolicyConfig())
+    action = await policy_engine.select_action(policy_engine.ApprovalRequest(record.id, approver.id, body.payload, now), request_class_policy, pressure, state_store, policy_engine.PolicyConfig())
     deadline = action.deadline or (now + timedelta(seconds=request_class.max_wait_seconds))
-    await request.app.state.state_store.enqueue(approver.id, record.id, deadline)
+    await state_store.enqueue(approver.id, record.id, deadline, enqueued_at=now)
     add_decision(db, record.id, approver.id, "queued", f"policy_action: {action.kind}")
     # Simple, conservative estimate: time until this request's deadline.
     estimated = max(0, int((deadline - now).total_seconds()))

@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState, type Dispatch } from 'react'
-import { Bot, Play, RotateCcw, Zap } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import type { RequestClass } from '@/lib/types'
 import type { WeirAction } from '@/state/weirReducer'
 
@@ -58,28 +56,23 @@ export function DemoControls({ selectedApproverId, requestClasses, dispatch, onR
     dispatch({ type: 'FORCE_CRITICAL', approverId: selectedApproverId })
   }
 
-  const agentCycleDisabled = !selectedApproverId
-  console.debug('[DemoControls] Trigger Agent Cycle disabled:', agentCycleDisabled, { selectedApproverId })
+  const buttonClass = 'border border-ink px-3 py-1.5 font-mono text-xs uppercase tracking-wide disabled:opacity-40 hover:bg-ink hover:text-paper disabled:hover:bg-transparent disabled:hover:text-ink'
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Button onClick={startRamp} disabled={ramping} className="bg-cyan-500 text-zinc-950 hover:bg-cyan-400">
-        <Play className="size-4" />
-        {ramping ? 'Ramping…' : 'Ramp Load'}
-      </Button>
-      <Button variant="outline" disabled={!selectedApproverId} onClick={() => dispatch({ type: 'RUN_AGENT_CYCLE', approverId: selectedApproverId })}>
-        <Bot className="size-4" />
-        Trigger Agent Cycle
-      </Button>
-      <Button variant="outline" disabled={!selectedApproverId} onClick={forceCritical} className="border-red-500/40 text-red-300 hover:bg-red-500/10 hover:text-red-200">
-        <Zap className="size-4" />
-        Force Critical
-      </Button>
-      <Button variant="ghost" onClick={reset} className="text-zinc-400 hover:text-zinc-100">
-        <RotateCcw className="size-4" />
-        Reset Demo
-      </Button>
-      {ramping && <span className="flex items-center gap-1.5 font-mono text-xs text-cyan-300"><Zap className="size-3.5 animate-pulse" /> synthetic load active</span>}
+      <button type="button" onClick={startRamp} disabled={ramping} className={`${buttonClass} bg-ink text-paper hover:bg-ink`}>
+        {ramping ? 'Ramping…' : 'Ramp load'}
+      </button>
+      <button type="button" disabled={!selectedApproverId} onClick={() => dispatch({ type: 'RUN_AGENT_CYCLE', approverId: selectedApproverId })} className={buttonClass}>
+        Trigger agent cycle
+      </button>
+      <button type="button" disabled={!selectedApproverId} onClick={forceCritical} className={`${buttonClass} border-accent text-accent hover:bg-accent hover:text-paper`}>
+        Force critical
+      </button>
+      <button type="button" onClick={reset} className={`${buttonClass} border-line text-muted hover:bg-ink hover:text-paper`}>
+        Reset demo
+      </button>
+      {ramping && <span className="font-mono text-xs uppercase tracking-wide text-muted">synthetic load active</span>}
     </div>
   )
 }

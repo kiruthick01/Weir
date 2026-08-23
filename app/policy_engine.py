@@ -97,11 +97,7 @@ class StateStoreProtocol(Protocol):
         self, approver_id: str, now: datetime
     ) -> list[str]: ...
 
-
-# Consecutive pressure observations are policy-engine state, not request state.
-# The store identity keeps independent StateStore instances isolated in tests
-# and in applications that create more than one policy context.
-_consecutive_observations: dict[tuple[int, str, str], int] = {}
+    async def observe_pressure_band(self, approver_id: str, band: str) -> int: ...
 
 
 def _target_pressure(
@@ -161,34 +157,26 @@ async def evaluate_pressure(
     current_state = stored[0] if stored is not None else "normal"
 
     if p50_ms is None:
-        observation_key = (id(state_store), approver_id, "none")
-        _consecutive_observations[observation_key] = 0
+        band = "none"
     elif p50_ms > thresholds.threshold_critical_ms:
-        observation_key = (id(state_store), approver_id, "critical")
-        _consecutive_observations[observation_key] = (
-            _consecutive_observations.get(observation_key, 0) + 1
-        )
+        band = "critical"
     elif p50_ms > thresholds.threshold_elevated_ms:
-        observation_key = (id(state_store), approver_id, "elevated")
-        _consecutive_observations[observation_key] = (
-            _consecutive_observations.get(observation_key, 0) + 1
-        )
+        band = "elevated"
     else:
-        observation_key = (id(state_store), approver_id, "normal")
-        _consecutive_observations[observation_key] = (
-            _consecutive_observations.get(observation_key, 0) + 1
-        )
+        band = "normal"
 
-    # A new metric band starts a fresh consecutive run.
-    for key in list(_consecutive_observations):
-        if key[0] == id(state_store) and key[1] == approver_id and key != observation_key:
-            _consecutive_observations[key] = 0
+    # Consecutive-observation bookkeeping lives on the store instance (see
+    # StateStore.observe_pressure_band) so it is lock-protected and cannot
+    # leak across unrelated StateStore instances or processes.
+    consecutive_count = await state_store.observe_pressure_band(approver_id, band)
+    if band == "none":
+        consecutive_count = 0
 
     target = _target_pressure(
         p50_ms,
         thresholds,
         current_state,
-        _consecutive_observations[observation_key],
+        consecutive_count,
     )
     changed = await state_store.set_pressure_state(approver_id, target, now)
     actual = await state_store.get_pressure_state(approver_id)
