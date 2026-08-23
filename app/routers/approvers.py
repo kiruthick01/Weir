@@ -10,7 +10,7 @@ router = APIRouter(prefix="/v1/approvers", tags=["approvers"])
 
 @router.get("")
 def list_approvers(db: Session = Depends(get_db)):
-    return {"approvers": [{"approver_id": item.id, "name": item.name, "email": item.email} for item in db.scalars(select(ApproverModel).order_by(ApproverModel.name))]}
+    return {"approvers": [{"approver_id": item.id, "name": item.name, "email": item.email, "backup_approver_id": item.backup_approver_id} for item in db.scalars(select(ApproverModel).order_by(ApproverModel.name))]}
 
 
 @router.get("/{approver_id}/status")
