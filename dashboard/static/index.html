@@ -7,42 +7,114 @@
   <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <div class="eyebrow">LIVE GOVERNANCE CONSOLE</div>
-      <h1>Weir <span>—</span> Admission Control</h1>
-    </div>
-    <div id="system-health" class="health degraded"><i></i><span>degraded</span></div>
-  </header>
-
-  <main>
-    <section class="section-heading">
-      <div><span class="eyebrow">APPROVER CAPACITY</span><h2>Pressure overview</h2></div>
-      <span class="refresh-note">polling every 2s</span>
-    </section>
-    <section id="approver-cards" class="approver-grid" aria-live="polite"></section>
-
-    <section class="workspace">
-      <div class="section-heading">
-        <div><span class="eyebrow">SELECTED APPROVER</span><h2 id="queue-title">Queue</h2></div>
-        <span id="queue-count" class="count">0 requests</span>
+  <div class="app">
+    <nav class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">W</span>
+        <div>
+          <div class="brand-name">WEIR</div>
+          <div class="brand-sub">Admission control</div>
+        </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Request</th><th>Source</th><th>Class</th><th>Queued</th><th>Deadline</th><th>Override</th></tr></thead>
-          <tbody id="queue-body"><tr><td colspan="6" class="empty">No approver selected.</td></tr></tbody>
-        </table>
-      </div>
-    </section>
 
-    <section class="workspace ledger-section">
-      <div class="section-heading">
-        <div><span class="eyebrow">AUDIT TRAIL</span><h2>Decision ledger</h2></div>
-        <span id="ledger-count" class="count">0 entries</span>
+      <ul class="nav-list">
+        <li><button class="nav-item active" data-view="overview"><span class="nav-num">01</span>Overview</button></li>
+        <li><button class="nav-item" data-view="approvers"><span class="nav-num">02</span>Approvers</button></li>
+        <li><button class="nav-item" data-view="queue"><span class="nav-num">03</span>Queue</button></li>
+        <li><button class="nav-item" data-view="ledger"><span class="nav-num">04</span>Ledger</button></li>
+        <li><button class="nav-item" data-view="policy"><span class="nav-num">05</span>Policy</button></li>
+        <li><button class="nav-item" data-view="pairs"><span class="nav-num">06</span>Delegation</button></li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div>status: <span id="system-health">degraded</span></div>
+        <div>checked <span id="health-checked">—</span></div>
+        <div>readiness: <span id="ready-status">—</span></div>
+        <div class="metrics-link">raw metrics at <code>/metrics</code></div>
       </div>
-      <div id="ledger" class="ledger"></div>
-    </section>
-  </main>
+    </nav>
+
+    <main class="content">
+
+      <section class="view active" id="view-overview" data-view="overview">
+        <div class="view-header"><span class="view-number">01</span><h1 class="view-title">Overview</h1><span class="refresh-note">polling every 2s</span></div>
+
+        <div class="kpi-grid">
+          <div class="kpi"><span class="kpi-label">Approvers monitored</span><span class="kpi-value" id="stat-approvers">—</span></div>
+          <div class="kpi"><span class="kpi-label">Elevated / critical</span><span class="kpi-value" id="stat-pressure">—</span></div>
+          <div class="kpi"><span class="kpi-label">Requests queued</span><span class="kpi-value" id="stat-queued">—</span></div>
+          <div class="kpi"><span class="kpi-label">p50 latency, worst</span><span class="kpi-value" id="stat-latency">—</span></div>
+          <div class="kpi"><span class="kpi-label">Decisions, window</span><span class="kpi-value" id="stat-decisions">—</span></div>
+        </div>
+
+        <h2 class="subhead">Pressure by approver <span class="hint">red = critical</span></h2>
+        <div id="pressure-bars" class="pressure-bars"></div>
+
+        <h2 class="subhead">Decision outcomes <span id="outcome-window" class="hint">window: 0</span></h2>
+        <div id="outcome-strip" class="outcome-strip"></div>
+      </section>
+
+      <section class="view" id="view-approvers" data-view="approvers">
+        <div class="view-header"><span class="view-number">02</span><h1 class="view-title">Approvers</h1><span class="refresh-note">click a row to inspect its queue</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Approver</th><th>State</th><th>p50 latency</th><th>Queue</th><th>State since</th></tr></thead>
+            <tbody id="approver-rows" aria-live="polite"><tr><td colspan="5" class="empty">Loading approvers.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="view-queue" data-view="queue">
+        <div class="view-header"><span class="view-number">03</span><h1 class="view-title">Queue</h1></div>
+        <div class="queue-controls">
+          <label for="queue-approver-select">Approver</label>
+          <select id="queue-approver-select"></select>
+          <span id="queue-count" class="count">0 requests</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Request</th><th>Source</th><th>Class</th><th>Queued</th><th>Deadline</th><th>Override</th></tr></thead>
+            <tbody id="queue-body"><tr><td colspan="6" class="empty">No approver selected.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="view-ledger" data-view="ledger">
+        <div class="view-header"><span class="view-number">04</span><h1 class="view-title">Ledger</h1></div>
+        <div class="ledger-controls">
+          <select id="ledger-filter"><option value="">All approvers</option></select>
+          <span id="ledger-count" class="count">0 entries</span>
+        </div>
+        <div class="table-wrap scroll">
+          <table>
+            <thead><tr><th>Time</th><th>Outcome</th><th>Approver</th><th>Request</th><th>Reason</th></tr></thead>
+            <tbody id="ledger-body"><tr><td colspan="5" class="empty">No decisions recorded yet.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="view-policy" data-view="policy">
+        <div class="view-header"><span class="view-number">05</span><h1 class="view-title">Policy</h1></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Request class</th><th>Max wait</th><th>Auto-approve under</th><th>Risk tier</th></tr></thead>
+            <tbody id="policy-body"><tr><td colspan="4" class="empty">Loading.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="view" id="view-pairs" data-view="pairs">
+        <div class="view-header"><span class="view-number">06</span><h1 class="view-title">Delegation</h1></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Approver</th><th>Backup approver</th></tr></thead>
+            <tbody id="pairs-body"><tr><td colspan="2" class="empty">Loading.</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
   <script src="/dashboard.js"></script>
 </body>
 </html>
